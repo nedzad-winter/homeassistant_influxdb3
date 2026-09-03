@@ -39,6 +39,9 @@ echo "==================================================="
 
 influxdb3 serve \
   --node-id="$NODE_ID" \
+  --cluster-id="$CLUSTER_ID" \      
+  --license-email="$LICENSE_EMAIL" \ 
+  --license-type="$LICENSE_TYPE" \   
   --object-store=file \
   --data-dir="$DATA_DIR" \
   --http-bind=0.0.0.0:8181 \
