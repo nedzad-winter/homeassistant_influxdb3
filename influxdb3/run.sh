@@ -2,7 +2,10 @@
 set -e
 
 CONFIG_PATH=/data/options.json
-NODE_ID=$(jq -r '.node_id // "home-assistant"' "$CONFIG_PATH")
+NODE_ID=$(jq -r '.node_id // "ha-node1"' "$CONFIG_PATH")
+CLUSTER_ID=$(jq -r '.cluster_id // "home-assistant"' "$CONFIG_PATH")
+LICENSE_EMAIL=$(jq -r '.license_email // ""' "$CONFIG_PATH")
+LICENSE_TYPE=$(jq -r '.license_type // "home"' "$CONFIG_PATH")
 SNAPSHOT_MB=$(jq -r '.force_snapshot_mem_size_mb // 512' "$CONFIG_PATH")
 EXEC_POOL_MB=$(jq -r '.exec_mem_pool_size_mb // 256' "$CONFIG_PATH")
 FILE_CACHE_MB=$(jq -r '.file_cache_size_mb // 256' "$CONFIG_PATH")
@@ -13,21 +16,26 @@ TOKEN_FILE=/data/admin_token.json
 
 mkdir -p "$DATA_DIR"
 
+if [ -z "$LICENSE_EMAIL" ]; then
+  echo "ERROR: license_email is empty. InfluxDB 3 Enterprise needs an email address to"
+  echo "issue its licence (the free Home tier is non-commercial, max 2 cores, single node)."
+  exit 1
+fi
+
+# Enterprise refuses to start if these match, and the catalog lives under the
+# CLUSTER id ("<data-dir>/<cluster-id>/catalog") whereas Core wrote it under the
+# NODE id. Keeping cluster_id at the old node_id ("home-assistant") is what lets
+# Enterprise adopt the existing Core catalog in place instead of starting empty.
+if [ "$CLUSTER_ID" = "$NODE_ID" ]; then
+  echo "ERROR: cluster_id and node_id must differ (cluster_id=${CLUSTER_ID})."
+  exit 1
+fi
+
 echo "==================================================="
-echo "InfluxDB 3 Core Add-on starting (node-id: ${NODE_ID})"
+echo "InfluxDB 3 Enterprise Add-on starting (cluster-id: ${CLUSTER_ID}, node-id: ${NODE_ID})"
+echo "Licence: type=${LICENSE_TYPE}"
 echo "Memory bounds: force-snapshot=${SNAPSHOT_MB}mb exec-pool=${EXEC_POOL_MB}mb file-cache=${FILE_CACHE_MB}mb gen1-duration=${GEN1_DURATION} query-file-limit=${QUERY_FILE_LIMIT}"
 echo "==================================================="
-# These flags default to PERCENTAGES OF HOST RAM (force-snapshot-mem-size and
-# exec-mem-pool-size default to 50% / 20%!) which is unsafe on a shared HA host
-# running many other apps - always pass explicit absolute values here.
-# gen1-duration only accepts 1m/5m/10m (not an arbitrary duration) - it can't be
-# widened to reduce file fragmentation from a multi-year historical backfill.
-# query-file-limit caps how many parquet files a single query may scan; Core
-# doesn't auto-compact (that's an Enterprise feature), so a low-frequency but
-# multi-year backfilled dataset needs this raised or ordinary dashboard time
-# ranges fail with "exceeding the file limit". Entity-filtered queries (what
-# every real dashboard panel does) touch far fewer files than an unfiltered
-# full-table scan, so this mainly protects against accidental full scans.
 
 influxdb3 serve \
   --node-id="$NODE_ID" \
@@ -66,6 +74,8 @@ if [ ! -f "$TOKEN_FILE" ]; then
 else
   echo "Existing admin token file found at ${TOKEN_FILE}; not creating a new one."
 fi
+
+
 
 echo "Starting HA-compatibility proxy on :8080 (translates empty test-writes to 204, like InfluxDB 1.x)"
 python3 /compat_proxy.py &

@@ -1,6 +1,6 @@
-name: InfluxDB 3 Core
-description: Self-hosted InfluxDB 3 Core (open-source), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints.
-version: "1.0.2"
+name: InfluxDB 3 Enterprise
+description: Self-hosted InfluxDB 3 Enterprise (free Home licence, non-commercial), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints. Enterprise compacts parquet files in the background, which Core does not - this is what makes multi-month dashboard ranges possible.
+version: "1.1.0"
 slug: influxdb3
 init: false
 startup: services
@@ -16,7 +16,10 @@ ports_description:
   8181/tcp: InfluxDB 3 Core HTTP API (v1/v2 compatible write + InfluxQL query) - direct, no empty-write compatibility shim
   8080/tcp: HA/Grafana-facing compatibility proxy - use this port for client connections
 options:
-  node_id: home-assistant
+  node_id: ha-node1
+  cluster_id: home-assistant
+  license_email: ""
+  license_type: home
   force_snapshot_mem_size_mb: 512
   exec_mem_pool_size_mb: 256
   file_cache_size_mb: 256
@@ -24,6 +27,9 @@ options:
   query_file_limit: 10000
 schema:
   node_id: str
+  cluster_id: str
+  license_email: str
+  license_type: list(home|trial|commercial)
   force_snapshot_mem_size_mb: int
   exec_mem_pool_size_mb: int
   file_cache_size_mb: int

@@ -1,4 +1,4 @@
-FROM influxdb:3-core
+FROM influxdb:3-enterprise
 
 USER root
 
