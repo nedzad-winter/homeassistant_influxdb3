@@ -1,0 +1,31 @@
+name: InfluxDB 3 Core
+description: Self-hosted InfluxDB 3 Core (open-source), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints.
+version: "1.0.2"
+slug: influxdb3
+init: false
+startup: services
+boot: auto
+backup: hot
+arch:
+  - aarch64
+  - amd64
+ports:
+  8181/tcp: 8181
+  8080/tcp: 8080
+ports_description:
+  8181/tcp: InfluxDB 3 Core HTTP API (v1/v2 compatible write + InfluxQL query) - direct, no empty-write compatibility shim
+  8080/tcp: HA/Grafana-facing compatibility proxy - use this port for client connections
+options:
+  node_id: home-assistant
+  force_snapshot_mem_size_mb: 512
+  exec_mem_pool_size_mb: 256
+  file_cache_size_mb: 256
+  gen1_duration: 10m
+  query_file_limit: 10000
+schema:
+  node_id: str
+  force_snapshot_mem_size_mb: int
+  exec_mem_pool_size_mb: int
+  file_cache_size_mb: int
+  gen1_duration: str
+  query_file_limit: int
