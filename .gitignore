@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .DS_Store
+
+# Unrelated local-only add-on, not part of this repo
+/mod_download_counter/
