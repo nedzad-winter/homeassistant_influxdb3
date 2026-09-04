@@ -2,8 +2,8 @@
 set -e
 
 CONFIG_PATH=/data/options.json
-NODE_ID=$(jq -r '.node_id // "ha-node1"' "$CONFIG_PATH")
-CLUSTER_ID=$(jq -r '.cluster_id // "home-assistant"' "$CONFIG_PATH")
+NODE_ID=$(jq -r '.node_id // "home-assistant"' "$CONFIG_PATH")
+CLUSTER_ID=$(jq -r '.cluster_id // "ha-cluster"' "$CONFIG_PATH")
 LICENSE_EMAIL=$(jq -r '.license_email // ""' "$CONFIG_PATH")
 LICENSE_TYPE=$(jq -r '.license_type // "home"' "$CONFIG_PATH")
 SNAPSHOT_MB=$(jq -r '.force_snapshot_mem_size_mb // 512' "$CONFIG_PATH")
@@ -11,6 +11,7 @@ EXEC_POOL_MB=$(jq -r '.exec_mem_pool_size_mb // 256' "$CONFIG_PATH")
 FILE_CACHE_MB=$(jq -r '.file_cache_size_mb // 256' "$CONFIG_PATH")
 GEN1_DURATION=$(jq -r '.gen1_duration // "10m"' "$CONFIG_PATH")
 QUERY_FILE_LIMIT=$(jq -r '.query_file_limit // 10000' "$CONFIG_PATH")
+COMPACTION_MAX_FILES=$(jq -r '.compaction_max_num_files_per_plan // 2000' "$CONFIG_PATH")
 DATA_DIR=/data/influxdb3
 TOKEN_FILE=/data/admin_token.json
 
@@ -23,9 +24,11 @@ if [ -z "$LICENSE_EMAIL" ]; then
 fi
 
 # Enterprise refuses to start if these match, and the catalog lives under the
-# CLUSTER id ("<data-dir>/<cluster-id>/catalog") whereas Core wrote it under the
-# NODE id. Keeping cluster_id at the old node_id ("home-assistant") is what lets
-# Enterprise adopt the existing Core catalog in place instead of starting empty.
+# CLUSTER id ("<data-dir>/<cluster-id>/catalog") whereas the node's own data (wal,
+# snapshots, dbs) stays under the NODE id. Core wrote everything under the node id,
+# so migrating means copying only <node-id>/catalog to <cluster-id>/catalog and
+# keeping node_id unchanged - the Home licence allows just one node per cluster,
+# so starting under a new node id fails licence validation outright.
 if [ "$CLUSTER_ID" = "$NODE_ID" ]; then
   echo "ERROR: cluster_id and node_id must differ (cluster_id=${CLUSTER_ID})."
   exit 1
@@ -35,8 +38,35 @@ echo "==================================================="
 echo "InfluxDB 3 Enterprise Add-on starting (cluster-id: ${CLUSTER_ID}, node-id: ${NODE_ID})"
 echo "Licence: type=${LICENSE_TYPE}"
 echo "Memory bounds: force-snapshot=${SNAPSHOT_MB}mb exec-pool=${EXEC_POOL_MB}mb file-cache=${FILE_CACHE_MB}mb gen1-duration=${GEN1_DURATION} query-file-limit=${QUERY_FILE_LIMIT}"
+echo "Compaction: max-num-files-per-plan=${COMPACTION_MAX_FILES}"
 echo "==================================================="
 
+SERVER_PID=""
+PROXY_PID=""
+
+# Supervisor sends SIGTERM and SIGKILLs shortly after. Without forwarding it,
+# influxdb3 never gets the signal, is killed outright (exit 137) and loses whatever
+# is still buffered in the WAL. Forward it and wait for a real shutdown instead.
+term_handler() {
+  echo "SIGTERM received - shutting down cleanly..."
+  if [ -n "$PROXY_PID" ]; then
+    kill -TERM "$PROXY_PID" 2>/dev/null || true
+  fi
+  if [ -n "$SERVER_PID" ]; then
+    kill -TERM "$SERVER_PID" 2>/dev/null || true
+    # Let influxdb3 flush its WAL and deregister the node before we exit.
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  echo "shutdown complete"
+  exit 0
+}
+trap term_handler SIGTERM SIGINT
+
+# force-snapshot-mem-size and exec-mem-pool-size default to PERCENTAGES OF HOST
+# RAM (50% / 20%), which is unsafe on a shared HA host - always pass absolutes.
+# compaction-max-num-files-per-plan defaults to 500, which silently skips any
+# window holding more gen1 files than that ("skipping level compaction due to file
+# limit"), leaving historical windows fragmented forever.
 influxdb3 serve \
   --node-id="$NODE_ID" \
   --cluster-id="$CLUSTER_ID" \
@@ -49,7 +79,8 @@ influxdb3 serve \
   --exec-mem-pool-size="${EXEC_POOL_MB}mb" \
   --file-cache-size="${FILE_CACHE_MB}mb" \
   --gen1-duration="$GEN1_DURATION" \
-  --query-file-limit="$QUERY_FILE_LIMIT" &
+  --query-file-limit="$QUERY_FILE_LIMIT" \
+  --compaction-max-num-files-per-plan="$COMPACTION_MAX_FILES" &
 SERVER_PID=$!
 
 if [ ! -f "$TOKEN_FILE" ]; then
@@ -77,8 +108,6 @@ if [ ! -f "$TOKEN_FILE" ]; then
 else
   echo "Existing admin token file found at ${TOKEN_FILE}; not creating a new one."
 fi
-
-
 
 echo "Starting HA-compatibility proxy on :8080 (translates empty test-writes to 204, like InfluxDB 1.x)"
 python3 /compat_proxy.py &

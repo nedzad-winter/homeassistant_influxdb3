@@ -1,6 +1,6 @@
 name: InfluxDB 3 Enterprise
 description: Self-hosted InfluxDB 3 Enterprise (free Home licence, non-commercial), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints. Enterprise compacts parquet files in the background, which Core does not - this is what makes multi-month dashboard ranges possible.
-version: "1.1.0"
+version: "1.2.0"
 slug: influxdb3
 init: false
 startup: services
@@ -15,9 +15,14 @@ ports:
 ports_description:
   8181/tcp: InfluxDB 3 Core HTTP API (v1/v2 compatible write + InfluxQL query) - direct, no empty-write compatibility shim
   8080/tcp: HA/Grafana-facing compatibility proxy - use this port for client connections
+# node_id MUST stay at the node id the Core add-on used ("home-assistant"): the free
+# Home licence permits exactly ONE node per cluster, so joining under a new node id
+# fails with "only one node is allowed when using Home License". Enterprise then puts
+# the catalog under <data-dir>/<cluster-id>/ and node data under <data-dir>/<node-id>/,
+# which is why cluster_id has to be a *different*, new name.
 options:
-  node_id: ha-node1
-  cluster_id: home-assistant
+  node_id: home-assistant
+  cluster_id: ha-cluster
   license_email: ""
   license_type: home
   force_snapshot_mem_size_mb: 512
@@ -25,6 +30,7 @@ options:
   file_cache_size_mb: 256
   gen1_duration: 10m
   query_file_limit: 10000
+  compaction_max_num_files_per_plan: 2000
 schema:
   node_id: str
   cluster_id: str
@@ -35,3 +41,4 @@ schema:
   file_cache_size_mb: int
   gen1_duration: str
   query_file_limit: int
+  compaction_max_num_files_per_plan: int
