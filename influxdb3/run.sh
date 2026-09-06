@@ -12,6 +12,10 @@ FILE_CACHE_MB=$(jq -r '.file_cache_size_mb // 256' "$CONFIG_PATH")
 GEN1_DURATION=$(jq -r '.gen1_duration // "10m"' "$CONFIG_PATH")
 QUERY_FILE_LIMIT=$(jq -r '.query_file_limit // 10000' "$CONFIG_PATH")
 COMPACTION_MAX_FILES=$(jq -r '.compaction_max_num_files_per_plan // 2000' "$CONFIG_PATH")
+SKIP_FILE_INDEX=$(jq -r '.compacted_data_skip_file_index // true' "$CONFIG_PATH")
+# Fallback is true, matching the config.yaml default: Supervisor only learns the new
+# schema key after the store refreshes, so until then options.json has no such key and
+# the jq default is what actually decides.
 DATA_DIR=/data/influxdb3
 TOKEN_FILE=/data/admin_token.json
 
@@ -38,7 +42,7 @@ echo "==================================================="
 echo "InfluxDB 3 Enterprise Add-on starting (cluster-id: ${CLUSTER_ID}, node-id: ${NODE_ID})"
 echo "Licence: type=${LICENSE_TYPE}"
 echo "Memory bounds: force-snapshot=${SNAPSHOT_MB}mb exec-pool=${EXEC_POOL_MB}mb file-cache=${FILE_CACHE_MB}mb gen1-duration=${GEN1_DURATION} query-file-limit=${QUERY_FILE_LIMIT}"
-echo "Compaction: max-num-files-per-plan=${COMPACTION_MAX_FILES}"
+echo "Compaction: max-num-files-per-plan=${COMPACTION_MAX_FILES} skip-file-index=${SKIP_FILE_INDEX}"
 echo "==================================================="
 
 SERVER_PID=""
@@ -62,6 +66,16 @@ term_handler() {
 }
 trap term_handler SIGTERM SIGINT
 
+# --compacted-data-skip-file-index is a bare boolean flag, so it has to be added
+# conditionally rather than passed a value. It loads compacted data WITHOUT building
+# the in-memory file index: query pruning gets worse, memory drops a lot. Needed here
+# because ~2.5M orphaned gen1 files (never deleted after compaction - upstream
+# influxdata/influxdb#27301) make that index enormous.
+SKIP_INDEX_ARG=()
+if [ "$SKIP_FILE_INDEX" = "true" ]; then
+  SKIP_INDEX_ARG=(--compacted-data-skip-file-index)
+fi
+
 # force-snapshot-mem-size and exec-mem-pool-size default to PERCENTAGES OF HOST
 # RAM (50% / 20%), which is unsafe on a shared HA host - always pass absolutes.
 # compaction-max-num-files-per-plan defaults to 500, which silently skips any
@@ -80,7 +94,8 @@ influxdb3 serve \
   --file-cache-size="${FILE_CACHE_MB}mb" \
   --gen1-duration="$GEN1_DURATION" \
   --query-file-limit="$QUERY_FILE_LIMIT" \
-  --compaction-max-num-files-per-plan="$COMPACTION_MAX_FILES" &
+  --compaction-max-num-files-per-plan="$COMPACTION_MAX_FILES" \
+  "${SKIP_INDEX_ARG[@]}" &
 SERVER_PID=$!
 
 if [ ! -f "$TOKEN_FILE" ]; then

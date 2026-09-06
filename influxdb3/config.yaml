@@ -1,6 +1,6 @@
 name: InfluxDB 3 Enterprise
 description: Self-hosted InfluxDB 3 Enterprise (free Home licence, non-commercial), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints. Enterprise compacts parquet files in the background, which Core does not - this is what makes multi-month dashboard ranges possible.
-version: "1.2.0"
+version: "1.3.0"
 slug: influxdb3
 init: false
 startup: services
@@ -31,6 +31,14 @@ options:
   gen1_duration: 10m
   query_file_limit: 10000
   compaction_max_num_files_per_plan: 2000
+  # Defaults to true on purpose for THIS deployment. Compaction has already rolled the
+  # whole 2024-2026 history into ~8.4k gen2+ files (4.5 GB), but influxdb3 never deletes
+  # the ~2.5M source gen1 files (59 GB on disk) - upstream influxdata/influxdb#27301,
+  # tracker influxdb_pro#2606, unfixed as of 3.11.3. Building an in-memory file index
+  # over 2.5M mostly-dead files is what drives RSS to the container cap and OOMs the
+  # add-on. Skipping the index trades query pruning for memory; queries here run in
+  # 7-14 ms, so there is ample headroom. Set to false once gen1 cleanup ships upstream.
+  compacted_data_skip_file_index: true
 schema:
   node_id: str
   cluster_id: str
@@ -42,3 +50,4 @@ schema:
   gen1_duration: str
   query_file_limit: int
   compaction_max_num_files_per_plan: int
+  compacted_data_skip_file_index: bool
