@@ -1,6 +1,6 @@
 name: InfluxDB 3 Enterprise
 description: Self-hosted InfluxDB 3 Enterprise (free Home licence, non-commercial), replacing the archived hassio-addons InfluxDB add-on. Accepts writes/queries via InfluxDB 1.x and 2.x compatible endpoints. Enterprise compacts parquet files in the background, which Core does not - this is what makes multi-month dashboard ranges possible.
-version: "1.3.0"
+version: "1.3.1"
 slug: influxdb3
 init: false
 startup: services

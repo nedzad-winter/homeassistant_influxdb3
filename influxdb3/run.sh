@@ -76,6 +76,19 @@ if [ "$SKIP_FILE_INDEX" = "true" ]; then
   SKIP_INDEX_ARG=(--compacted-data-skip-file-index)
 fi
 
+# A hard power loss can leave the newest WAL file at 0 bytes. Seen after one: influxdb3
+# logged "Skipping corrupt WAL file" for it on every start, then exited 1 with "node ...
+# still running in another process" until the empty file was renamed away, which put the
+# Supervisor watchdog into a restart loop. Quarantine empty WAL files only - a non-empty
+# one is never touched.
+WAL_DIR="$DATA_DIR/$NODE_ID/wal"
+if [ -d "$WAL_DIR" ]; then
+  find "$WAL_DIR" -maxdepth 1 -type f -name '*.wal' -size 0 | while read -r EMPTY_WAL; do
+    echo "WARNING: zero-byte WAL file $(basename "$EMPTY_WAL") (unclean shutdown?) - renaming to .bad"
+    mv -- "$EMPTY_WAL" "$EMPTY_WAL.bad" || true
+  done
+fi
+
 # force-snapshot-mem-size and exec-mem-pool-size default to PERCENTAGES OF HOST
 # RAM (50% / 20%), which is unsafe on a shared HA host - always pass absolutes.
 # compaction-max-num-files-per-plan defaults to 500, which silently skips any
@@ -97,6 +110,7 @@ influxdb3 serve \
   --compaction-max-num-files-per-plan="$COMPACTION_MAX_FILES" \
   "${SKIP_INDEX_ARG[@]}" &
 SERVER_PID=$!
+START_TS=$(date +%s)
 
 if [ ! -f "$TOKEN_FILE" ]; then
   echo "First boot detected: waiting for the server to accept connections so an admin token can be created..."
@@ -128,4 +142,20 @@ echo "Starting HA-compatibility proxy on :8080 (translates empty test-writes to 
 python3 /compat_proxy.py &
 PROXY_PID=$!
 
+set +e
 wait -n $SERVER_PID $PROXY_PID
+EXIT_CODE=$?
+set -e
+
+# The Supervisor watchdog restarts a failed add-on immediately. A start that dies within
+# seconds (WAL replay at ~120% CPU each time) then loops every ~17s and starves Home
+# Assistant on this shared host. Hold the failure for a while first; "sleep & wait" so the
+# SIGTERM trap still fires straight away instead of after the sleep.
+CRASH_BACKOFF_SECS=120
+RUNTIME=$(( $(date +%s) - START_TS ))
+if [ "$EXIT_CODE" -ne 0 ] && [ "$RUNTIME" -lt 60 ]; then
+  echo "ERROR: exited with code ${EXIT_CODE} after ${RUNTIME}s - waiting ${CRASH_BACKOFF_SECS}s before exiting so the watchdog does not restart-loop"
+  sleep "$CRASH_BACKOFF_SECS" &
+  wait $!
+fi
+exit "$EXIT_CODE"
