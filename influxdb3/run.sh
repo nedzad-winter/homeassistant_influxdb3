@@ -85,7 +85,7 @@ fi
 UPGRADE_ARG=()
 if [ "$UPGRADE_PACHA_TREE" = "true" ]; then
   echo "WARNING: upgrade_pacha_tree is on - migrating this cluster to the PachaTree engine."
-  echo "         Turn the option off again after \"storage mode transitioned to PachaTree\"."
+  echo "         Turn the option off again once the upgrade coordinator reports the cluster upgrade complete."
   UPGRADE_ARG=(--upgrade-pacha-tree)
 fi
 

@@ -48,7 +48,7 @@ options:
   compacted_data_skip_file_index: true
   # One-time Parquet -> PachaTree storage engine upgrade (see the upgrade plan). Turn on
   # only after the add-on has run once on this version WITH the compactor, and turn it
-  # off again once the log says "storage mode transitioned to PachaTree". The upgrade is
+  # off again once the upgrade coordinator logs "Cluster upgrade complete". The upgrade is
   # not reversible after `influxdb3 manage cleanup-parquet`.
   upgrade_pacha_tree: false
 schema:
