@@ -8,14 +8,16 @@ LICENSE_EMAIL=$(jq -r '.license_email // ""' "$CONFIG_PATH")
 LICENSE_TYPE=$(jq -r '.license_type // "home"' "$CONFIG_PATH")
 SNAPSHOT_MB=$(jq -r '.force_snapshot_mem_size_mb // 512' "$CONFIG_PATH")
 EXEC_POOL_MB=$(jq -r '.exec_mem_pool_size_mb // 256' "$CONFIG_PATH")
-FILE_CACHE_MB=$(jq -r '.file_cache_size_mb // 256' "$CONFIG_PATH")
+FILE_CACHE_MB=$(jq -r '.file_cache_size_mb // 2048' "$CONFIG_PATH")
+REPLICA_BUFFER_MB=$(jq -r '.replica_max_buffer_size_mb // 512' "$CONFIG_PATH")
 GEN1_DURATION=$(jq -r '.gen1_duration // "10m"' "$CONFIG_PATH")
 QUERY_FILE_LIMIT=$(jq -r '.query_file_limit // 10000' "$CONFIG_PATH")
 COMPACTION_MAX_FILES=$(jq -r '.compaction_max_num_files_per_plan // 2000' "$CONFIG_PATH")
-SKIP_FILE_INDEX=$(jq -r '.compacted_data_skip_file_index // true' "$CONFIG_PATH")
-# Fallback is true, matching the config.yaml default: Supervisor only learns the new
-# schema key after the store refreshes, so until then options.json has no such key and
-# the jq default is what actually decides.
+SKIP_FILE_INDEX=$(jq -r 'if .compacted_data_skip_file_index == null then true else .compacted_data_skip_file_index end' "$CONFIG_PATH")
+UPGRADE_PACHA_TREE=$(jq -r 'if .upgrade_pacha_tree == null then false else .upgrade_pacha_tree end' "$CONFIG_PATH")
+# Fallbacks match the config.yaml defaults: Supervisor only learns a new schema key after
+# the store refreshes, so until then options.json has no such key and the jq default is
+# what actually decides. Booleans use a null check because jq's // also replaces false.
 DATA_DIR=/data/influxdb3
 TOKEN_FILE=/data/admin_token.json
 
@@ -41,8 +43,9 @@ fi
 echo "==================================================="
 echo "InfluxDB 3 Enterprise Add-on starting (cluster-id: ${CLUSTER_ID}, node-id: ${NODE_ID})"
 echo "Licence: type=${LICENSE_TYPE}"
-echo "Memory bounds: force-snapshot=${SNAPSHOT_MB}mb exec-pool=${EXEC_POOL_MB}mb file-cache=${FILE_CACHE_MB}mb gen1-duration=${GEN1_DURATION} query-file-limit=${QUERY_FILE_LIMIT}"
+echo "Memory bounds: force-snapshot=${SNAPSHOT_MB}mb exec-pool=${EXEC_POOL_MB}mb file-cache=${FILE_CACHE_MB}mb replica-buffer=${REPLICA_BUFFER_MB}mb gen1-duration=${GEN1_DURATION} query-file-limit=${QUERY_FILE_LIMIT}"
 echo "Compaction: max-num-files-per-plan=${COMPACTION_MAX_FILES} skip-file-index=${SKIP_FILE_INDEX}"
+echo "Storage engine upgrade (--upgrade-pacha-tree): ${UPGRADE_PACHA_TREE}"
 echo "==================================================="
 
 SERVER_PID=""
@@ -76,16 +79,29 @@ if [ "$SKIP_FILE_INDEX" = "true" ]; then
   SKIP_INDEX_ARG=(--compacted-data-skip-file-index)
 fi
 
+# One-time Parquet -> PachaTree migration. The server keeps serving reads and writes while
+# it runs. It reports "complete" even when jobs failed, so verify per-table counts
+# against a baseline before ever running cleanup-parquet.
+UPGRADE_ARG=()
+if [ "$UPGRADE_PACHA_TREE" = "true" ]; then
+  echo "WARNING: upgrade_pacha_tree is on - migrating this cluster to the PachaTree engine."
+  echo "         Turn the option off again after \"storage mode transitioned to PachaTree\"."
+  UPGRADE_ARG=(--upgrade-pacha-tree)
+fi
+
 # A hard power loss can leave the newest WAL file at 0 bytes. Seen after one: influxdb3
 # logged "Skipping corrupt WAL file" for it on every start, then exited 1 with "node ...
-# still running in another process" until the empty file was renamed away, which put the
+# still running in another process" until the empty file was moved away, which put the
 # Supervisor watchdog into a restart loop. Quarantine empty WAL files only - a non-empty
-# one is never touched.
+# one is never touched. They go OUTSIDE the WAL directory: 3.12's WAL follower logs a
+# warning several times a second for any foreign file left in there (as *.wal.bad was).
 WAL_DIR="$DATA_DIR/$NODE_ID/wal"
+WAL_QUARANTINE=/data/wal-quarantine  # outside the object store, so no engine sweep ever lists it
 if [ -d "$WAL_DIR" ]; then
-  find "$WAL_DIR" -maxdepth 1 -type f -name '*.wal' -size 0 | while read -r EMPTY_WAL; do
-    echo "WARNING: zero-byte WAL file $(basename "$EMPTY_WAL") (unclean shutdown?) - renaming to .bad"
-    mv -- "$EMPTY_WAL" "$EMPTY_WAL.bad" || true
+  find "$WAL_DIR" -maxdepth 1 -type f \( -name '*.wal' -size 0 -o -name '*.wal.bad' \) | while read -r BAD_WAL; do
+    mkdir -p "$WAL_QUARANTINE"
+    echo "WARNING: quarantining WAL file $(basename "$BAD_WAL") (zero-byte from an unclean shutdown, or an old .bad) to ${WAL_QUARANTINE}"
+    mv -- "$BAD_WAL" "$WAL_QUARANTINE/" || true
   done
 fi
 
@@ -105,10 +121,12 @@ influxdb3 serve \
   --force-snapshot-mem-size="${SNAPSHOT_MB}mb" \
   --exec-mem-pool-size="${EXEC_POOL_MB}mb" \
   --file-cache-size="${FILE_CACHE_MB}mb" \
+  --replica-max-buffer-size="${REPLICA_BUFFER_MB}mb" \
   --gen1-duration="$GEN1_DURATION" \
   --query-file-limit="$QUERY_FILE_LIMIT" \
   --compaction-max-num-files-per-plan="$COMPACTION_MAX_FILES" \
-  "${SKIP_INDEX_ARG[@]}" &
+  "${SKIP_INDEX_ARG[@]}" \
+  "${UPGRADE_ARG[@]}" &
 SERVER_PID=$!
 START_TS=$(date +%s)
 
